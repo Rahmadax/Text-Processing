@@ -1,5 +1,6 @@
-import math, re, sys
-import time
+#==============================================================================
+# Importing
+import math
 
 class Retrieve:
     # Create new Retrieve object storing index and termWeighting scheme
@@ -12,15 +13,14 @@ class Retrieve:
     # Returns a list of 10 docids. 
     def forQuery(self, query):
         candidates = Retrieve.get_candidates(self, query) #get all docids that share 1 term with given query
-
-        if self.termWeighting == 'tf':
-            return(Tf.run_tf(self, query, candidates))
-        elif self.termWeighting == 'tfidf':
+        if self.termWeighting == 'tfidf':
             return(Tfidf.run_tfidf(self, query, candidates))
+        elif self.termWeighting == 'tf':
+            return(Tf.run_tf(self, query, candidates))
         elif self.termWeighting == 'binary':
-            return(range(0,10))
+            return(Binary.run_binary(self, query, candidates))
 
-    # Adds |D| as an instance variable, only calculated once. 
+    # Adds |D| as an instance variable, only calculated once each query set. T = ~0.01
     def get_doc_set(self):
         full_docs = set()
         for term in self.index:
@@ -36,70 +36,89 @@ class Retrieve:
         return(candidates)
 
     # Page rank methods are coded in seperate classes to simulate 'pluggable' modules with loose coupling / high cohesion.
-    # i.e. you can plugin or take out any class without effecting the others in any way. General functions placed above. 
+    # i.e. you can plugin or take out any class without effecting the others in any way. General functions placed above.
+    # The same can be performed with a few if statments, but opted to make it more 'realistic' and also slightly faster. 
+    # A compact version can also be found in the document upload. 
+    #============================= Binary ===============================#
+class Binary:
+    def run_binary(self, query, candidates):
+        v_lengths, candidate_scores = Binary.binary_get_candidate_scores(self, query, candidates)
+        distance_dict = {}
+        for doc_id in candidate_scores:
+            distance_dict[doc_id] = candidate_scores[doc_id] / math.sqrt(v_lengths[doc_id])
+        return(sorted(distance_dict, key=distance_dict.get, reverse=True)[:10]) #Sorts and returns biggest 10
 
-    #======================== Binary ==========================#
-#class Binary:
+    # Calculates Candidate term scores and the document vector length. 
+    def binary_get_candidate_scores(self, query, candidates):
+        candidate_scores = dict.fromkeys(candidates, 0) # Dictionary Initialisation
+        v_lengths = dict.fromkeys(candidates, 0)
+        for term in self.index: #Looping through the full index. 
+            for doc_id in self.index[term]: 
+                if doc_id in candidates:
+                    if term in query: # Term is only kept if it is also in query. 
+                        candidate_scores[doc_id] += 1
+                    v_lengths[doc_id] += 1
+        return v_lengths, candidate_scores
 
-    #========================   TF   ==========================#
+    #=============================   TF   ==============================#
 class Tf:
     def run_tf(self, query, candidates):
-        candidate_scores = {}
-        for term in self.index: # Loops through the entire index once & looks at each documentID in each term.
-            for doc_id in self.index[term]: 
-                if doc_id in candidates:
-                    if doc_id in candidate_scores: 
-                        candidate_scores[doc_id] = candidate_scores[doc_id] + self.index[term][doc_id]
-                    else:
-                        candidate_scores[doc_id] = self.index[term][doc_id]
-        return({key: candidate_scores[key] for key in sorted(candidate_scores, key=candidate_scores.get, reverse=True)[:10]})
-
-    #======================== TF:IDF ==========================#
-class Tfidf:
-    # Main function - Runs the tfidf page ranker and calls functions.
-    # returns an array of ten document ids sorted in decending order
-    def run_tfidf(self, query, candidates):
-        candidate_scores = Tfidf.get_candidate_scores(self, query, candidates)
-        query_scores = Tfidf.get_query_score(self, query)
+        query_scores = Tf.get_query_score(self, query)
+        v_lengths, candidate_scores = Tf.tf_get_candidate_scores(self, query, candidates, query_scores)
         distance_dict = {}
-        for candidate in candidate_scores:
-            distance_dict[candidate] = Tfidf.get_distance(query_scores, candidate, candidate_scores)
-        return({key: distance_dict[key] for key in sorted(distance_dict, key=distance_dict.get, reverse=True)[:10]}) #sorts dictionary, returns biggest 10. 
+        for doc_id in candidate_scores:
+            distance_dict[doc_id] = candidate_scores[doc_id] / math.sqrt(v_lengths[doc_id])
+        return(sorted(distance_dict, key=distance_dict.get, reverse=True)[:10]) #Sorts and returns biggest 10
 
-    # Returns a nested dictionary: documentID -> term -> tfidf. A term is ONLY kept if useful for later
-    # Also calculates a vector length for each term/document relation and adds it to the same dictionary
-    def get_candidate_scores(self, query, candidates):
-        candidate_scores = {}
-        for term in self.index: # Loops through the entire index once & looks at each documentID in each term.
-            idf = (math.log10(self.numDocs/len(self.index[term]))) 
+    # Calculates Candidate term scores and the document vector length. 
+    def tf_get_candidate_scores(self, query, candidates, query_scores):
+        candidate_scores = dict.fromkeys(candidates, 0) # Dictionary Initialisation
+        v_lengths = dict.fromkeys(candidates, 0)
+        for term in self.index: #Looping through the full index. 
             for doc_id in self.index[term]: 
                 if doc_id in candidates:
-                    score = (self.index[term][doc_id] * idf) # Tfidf score of the document / term releationship. 
-                    if doc_id in candidate_scores: # Note - vector length is NOT square rooted here. get_distance instead.
-                        candidate_scores[doc_id]['v_length'] = candidate_scores[doc_id]['v_length'] + (score**2) # A little messy but speeds up process. 
-                    else:
-                        candidate_scores[doc_id] = {'v_length': (score**2)}
-                    if term in query: # ONLY add the term to the dictionary if it is useful later. i.e if it shares the term with query. 
-                        candidate_scores[doc_id][term] = score
-        return candidate_scores
-    
-    # Calculates the word values in query.
-    # Returns a dictionary term -> tfidf. 
+                    score = (self.index[term][doc_id]) 
+                    if term in query: # Term is only kept if it is also in query. 
+                        candidate_scores[doc_id] += (score * query_scores[term])
+                    v_lengths[doc_id] += score*score # Document vector score. Not square rooted here. Done later
+        return v_lengths, candidate_scores
+
+    # Returns TF scores for the terms in query
     def get_query_score(self, query):
         query_scores = {}
-        v_length = 0
         for term in query:
             if term in self.index:
-                query_scores[term] = (query[term] * (math.log10(self.numDocs/len(self.index[term])))) #Tfidf score. 
+                query_scores[term] = query[term]  
         return(query_scores)
 
-    # Returns a single float that represents the similarity between the query and given doc
-    # Takes the queries tfidf scores dictionary, a documentID integer and the complete candidateID dictionary. 
-    def get_distance(query_scores, candidate, candidate_scores):
+    #============================= TF:IDF ===============================#
+class Tfidf:
+    def run_tfidf(self, query, candidates):
+        query_scores = Tfidf.get_query_score(self, query)
+        v_lengths, candidate_scores = Tfidf.tfidf_get_candidate_scores(self, query, candidates, query_scores)
         distance_dict = {}
-        tfidf_vector = 0
-        for term in query_scores:
-            if term in candidate_scores[candidate] and term != "v_length":
-                tfidf_vector += (query_scores[term] * candidate_scores[candidate][term])
-        tfidf_vector = (tfidf_vector/math.sqrt(candidate_scores[candidate]["v_length"])) # rooted here to avoid unnecessary loops.  
-        return tfidf_vector
+        for doc_id in candidate_scores:
+            distance_dict[doc_id] = candidate_scores[doc_id] / math.sqrt(v_lengths[doc_id])
+        return(sorted(distance_dict, key=distance_dict.get, reverse=True)[:10]) #Sorts and returns biggest 10
+
+    # Calculates Candidate term scores and the document vector length. 
+    def tfidf_get_candidate_scores(self, query, candidates, query_scores):
+        candidate_scores = dict.fromkeys(candidates, 0) # Dictionary Initialisation
+        v_lengths = dict.fromkeys(candidates, 0)
+        for term in self.index: #Looping through the full index. 
+            idf = (math.log10(self.numDocs/len(self.index[term]))) #IDF score for given Term
+            for doc_id in self.index[term]: 
+                if doc_id in candidates:
+                    score = (self.index[term][doc_id] * idf) # TFIDF score here.
+                    if term in query: # Term is only kept if it is also in query. 
+                        candidate_scores[doc_id] += (score * query_scores[term])
+                    v_lengths[doc_id] += score*score # Document vector score. Not square rooted here. Done later
+        return v_lengths, candidate_scores
+
+    # Returns TFIDF scores for the terms in query
+    def get_query_score(self, query):
+        query_scores = {}
+        for term in query:
+            if term in self.index: # Query TFIDF scores
+                query_scores[term] = (query[term] * (math.log10(self.numDocs/len(self.index[term])))) 
+        return(query_scores)
